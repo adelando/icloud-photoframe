@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iCloud Photo Frame",
+        "data": {
+          "album_name": "Album Name",
+          "token": "Shared Album URL"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "Invalid iCloud URL format."
+    }
+  },
+  "title": "iCloud Photo Frame"
+}
