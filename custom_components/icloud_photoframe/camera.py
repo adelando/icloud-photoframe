@@ -10,13 +10,17 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 CACHE_DIR = "/config/www/icloud_photoframe_cache/"
 
+# --- TESTING SETTINGS ---
+TEST_MODE = True  # Set to False for production (5-minute rotation)
+# ------------------------
+
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up the camera platform from a config entry."""
+    """Set up the camera platform."""
     token = entry.data["token"]
     camera = ICloudPhotoFrameCamera(token, entry.entry_id)
     async_add_entities([camera], True)
     
-    # Run the first sync immediately in the background
+    # Initial sync on startup
     await hass.async_add_executor_job(camera._sync_images)
 
 class ICloudPhotoFrameCamera(Camera):
@@ -24,7 +28,6 @@ class ICloudPhotoFrameCamera(Camera):
         super().__init__()
         self._token = token
         self._entry_id = entry_id
-        # Start with the default p23 shard
         self._base_url = f"https://p23-sharedstreams.icloud.com/{token}/sharedstreams"
         self._last_sync = 0
         self._headers = {
@@ -35,81 +38,84 @@ class ICloudPhotoFrameCamera(Camera):
         }
 
     def _sync_images(self):
-        """Fetch and download images, handling Apple shard redirection."""
-        _LOGGER.debug("Starting iCloud Sync for token %s", self._token)
+        """Fetch images and remove local files that are no longer in the album."""
+        _LOGGER.debug("Starting iCloud Sync and Cleanup")
         try:
             if not os.path.exists(CACHE_DIR):
                 os.makedirs(CACHE_DIR)
             
             session = requests.Session()
-            
-            # Step 1: Handshake with webstream
-            # We use text/plain and a raw JSON string because Apple's API is quirky
             webstream_url = f"{self._base_url}/webstream"
             r = session.post(webstream_url, data='{"streamCtag":null}', headers=self._headers)
             
-            # Handle Shard Redirection (e.g., if your album is on p04 instead of p23)
             if r.status_code == 330 or "X-Apple-MMe-Host" in r.headers:
                 host = r.headers.get("X-Apple-MMe-Host") or r.json().get("X-Apple-MMe-Host")
                 if host:
-                    _LOGGER.debug("Redirecting to new Apple host: %s", host)
                     self._base_url = f"https://{host}/{self._token}/sharedstreams"
                     webstream_url = f"{self._base_url}/webstream"
                     r = session.post(webstream_url, data='{"streamCtag":null}', headers=self._headers)
 
             r.raise_for_status()
             data = r.json()
-            
             photos = data.get("photos", [])
-            if not photos:
-                _LOGGER.error("Apple returned successfully but the photo list is empty. Check if 'Public Website' is enabled.")
-                return
+            if not photos: return
 
-            # Step 2: Get direct download URLs
-            guids = [p["photoGuid"] for p in photos]
-            asset_url = f"{self._base_url}/webasseturls"
-            r_assets = session.post(asset_url, data=json.dumps({"photoGuids": guids}), headers=self._headers)
-            r_assets.raise_for_status()
+            # Get set of GUIDs currently in iCloud
+            valid_guids = {p["photoGuid"] for p in photos}
+            
+            # Download missing
+            r_assets = session.post(f"{self._base_url}/webasseturls", 
+                                    data=json.dumps({"photoGuids": list(valid_guids)}), 
+                                    headers=self._headers)
             assets = r_assets.json().get("items", {})
 
-            # Step 3: Download missing images
-            download_count = 0
             for guid, asset in assets.items():
                 file_path = os.path.join(CACHE_DIR, f"{guid}.jpg")
                 if not os.path.exists(file_path):
                     url = f"https://{asset['url_location']}{asset['url_path']}"
-                    img_data = session.get(url).content
                     with open(file_path, 'wb') as f:
-                        f.write(img_data)
-                    download_count += 1
+                        f.write(session.get(url).content)
+
+            # CLEANUP: Remove local files not in iCloud anymore
+            for filename in os.listdir(CACHE_DIR):
+                guid = filename.split('.')[0]
+                if guid not in valid_guids:
+                    os.remove(os.path.join(CACHE_DIR, filename))
             
             self._last_sync = time.time()
-            _LOGGER.info("iCloud Sync complete. Total photos in album: %s. New downloads: %s", len(photos), download_count)
-
+            _LOGGER.info("iCloud Sync & Cleanup Complete")
         except Exception as e:
-            _LOGGER.error("CRITICAL SYNC ERROR: %s", e)
+            _LOGGER.error("Sync Error: %s", e)
 
     def camera_image(self, width=None, height=None):
-        """Return a random image from cache, changing every 5 minutes."""
-        # Refresh if it's been an hour
-        if (time.time() - self._last_sync) > 3600:
+        """Return random image with fallback for deleted files."""
+        now = time.time()
+        if (now - self._last_sync) > 3600:
             self._sync_images()
 
         files = [f for f in os.listdir(CACHE_DIR) if f.endswith('.jpg')]
-        if not files:
-            return None
+        if not files: return None
 
-        # Rotate every 300 seconds (5 minutes)
-        random.seed(int(time.time() // 300))
-        selected_file = random.choice(files)
+        # Rotation timing logic
+        interval = 10 if TEST_MODE else 300
         
-        with open(os.path.join(CACHE_DIR, selected_file), 'rb') as f:
-            return f.read()
+        # We try up to 5 times to find a file that actually exists
+        # (in case one was deleted manually but the hourly sync hasn't run)
+        for attempt in range(5):
+            random.seed(int(now // interval) + attempt)
+            selected_file = random.choice(files)
+            full_path = os.path.join(CACHE_DIR, selected_file)
+            
+            if os.path.exists(full_path):
+                try:
+                    with open(full_path, 'rb') as f:
+                        return f.read()
+                except Exception:
+                    continue
+        return None
 
     @property
-    def name(self):
-        return "iCloud Photo Frame"
+    def name(self): return "iCloud Photo Frame"
 
     @property
-    def unique_id(self):
-        return f"icloud_photoframe_{self._entry_id}"
+    def unique_id(self): return f"icloud_photoframe_{self._entry_id}"
