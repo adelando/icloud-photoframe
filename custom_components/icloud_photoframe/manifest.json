@@ -1,11 +1,11 @@
 {
   "domain": "icloud_photoframe",
-  "name": "iCloud Photo Frame",
+  "name": "iCloud Photoframe",
   "codeowners": ["@adelando"],
   "config_flow": true,
   "documentation": "https://github.com/adelando/icloud-photoframe",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/adelando/icloud-photoframe/issues",
   "requirements": ["requests"],
-  "version": "0.6"
+  "version": "0.7"
 }
