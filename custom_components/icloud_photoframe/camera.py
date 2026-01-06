@@ -19,10 +19,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
     token = entry.data["token"]
     camera = ICloudPhotoFrameCamera(token, entry.entry_id)
     
-    # SAVE the camera instance so button.py can find it
+    # Store camera instance for the button platform to access
+    hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = camera
     
     async_add_entities([camera], True)
+    
+    # Initial sync in the background
     await hass.async_add_executor_job(camera._sync_images)
 
 class ICloudPhotoFrameCamera(Camera):
@@ -32,7 +35,7 @@ class ICloudPhotoFrameCamera(Camera):
         self._entry_id = entry_id
         self._base_url = f"https://p23-sharedstreams.icloud.com/{token}/sharedstreams"
         self._last_sync = 0
-        self._manual_offset = 0  # Used to skip to next image
+        self._manual_offset = 0
         self._headers = {
             "Origin": "https://www.icloud.com",
             "Referer": "https://www.icloud.com/",
@@ -41,18 +44,21 @@ class ICloudPhotoFrameCamera(Camera):
         }
 
     def next_image(self):
-        """Advance the random seed to skip to the next image."""
+        """Advance the random seed safely."""
         self._manual_offset += 1
-        # This tells Home Assistant the state changed so the UI refreshes
-        self.async_write_ha_state()
+        # Thread-safe update call
+        self.schedule_update_ha_state()
 
     def _sync_images(self):
         """Fetch photos and cleanup deleted ones."""
         try:
             if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR)
             session = requests.Session()
+            
+            # Initial Handshake
             r = session.post(f"{self._base_url}/webstream", data='{"streamCtag":null}', headers=self._headers)
             
+            # Shard Redirection
             if r.status_code == 330 or "X-Apple-MMe-Host" in r.headers:
                 host = r.headers.get("X-Apple-MMe-Host") or r.json().get("X-Apple-MMe-Host")
                 if host:
@@ -73,8 +79,9 @@ class ICloudPhotoFrameCamera(Camera):
                 file_path = os.path.join(CACHE_DIR, f"{guid}.jpg")
                 if not os.path.exists(file_path):
                     url = f"https://{asset['url_location']}{asset['url_path']}"
+                    img_data = session.get(url).content
                     with open(file_path, 'wb') as f:
-                        f.write(session.get(url).content)
+                        f.write(img_data)
 
             # Cleanup
             for filename in os.listdir(CACHE_DIR):
@@ -83,7 +90,7 @@ class ICloudPhotoFrameCamera(Camera):
                     os.remove(os.path.join(CACHE_DIR, filename))
             
             self._last_sync = time.time()
-            _LOGGER.info("iCloud Photo Frame: Sync & Cleanup Successful")
+            _LOGGER.info("iCloud Photo Frame: Sync successful")
         except Exception as e:
             _LOGGER.error("iCloud Photo Frame: Sync Error: %s", e)
 
@@ -98,7 +105,7 @@ class ICloudPhotoFrameCamera(Camera):
 
         interval = 10 if TEST_MODE else 300
         
-        # Try to find a valid file (adding manual_offset to skip images)
+        # Try finding valid file
         for attempt in range(5):
             random.seed(int(now // interval) + self._manual_offset + attempt)
             selected_file = random.choice(files)
