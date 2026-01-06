@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iCloud Photo Frame Setup",
+        "description": "Enter the Public Website URL from your iCloud Shared Album.",
+        "data": {
+          "album_name": "Album Name (e.g., Kitchen Frame)",
+          "token": "iCloud Shared Album Link"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "The URL provided does not look like a valid iCloud Shared Album link."
+    }
+  }
+}
