@@ -2,11 +2,8 @@ from homeassistant.components.button import ButtonEntity
 from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    # We find the camera entity we created to link the buttons to it
-    # For a simple custom integration, we can pass the camera instance 
-    # Or use the hass.data storage.
-    
-    # Since we want these buttons to work specifically with our camera:
+    """Set up the buttons for iCloud Photo Frame."""
+    # Fetch camera instance from memory
     camera_entity = hass.data[DOMAIN][entry.entry_id]
     
     async_add_entities([
@@ -21,9 +18,9 @@ class RefreshButton(ButtonEntity):
         self._attr_unique_id = f"{entry_id}_refresh"
         self._attr_icon = "mdi:refresh"
 
-    async def async_press(self):
-        """Force a sync when pressed."""
-        await self.hass.async_add_executor_job(self._camera._sync_images)
+    def press(self):
+        """Force a sync safely using a thread job."""
+        self.hass.add_job(self._camera._sync_images)
 
 class NextImageButton(ButtonEntity):
     def __init__(self, camera, entry_id):
