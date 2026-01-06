@@ -6,14 +6,10 @@ import logging
 import json
 from homeassistant.components.camera import Camera
 from homeassistant.components.persistent_notification import async_create, async_dismiss
-from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 CACHE_BASE_DIR = "/config/www/icloud_photoframe_cache/"
-
-# --- SETTINGS ---
 TEST_MODE = True 
-# ----------------
 
 async def async_setup_entry(hass, entry, async_add_entities):
     token = entry.data["token"]
@@ -21,36 +17,23 @@ async def async_setup_entry(hass, entry, async_add_entities):
     camera = ICloudPhotoFrameCamera(token, album_name, entry.entry_id)
     async_add_entities([camera], True)
     
-    # Create a notification ID unique to this album
     notification_id = f"icloud_sync_{entry.entry_id}"
     
-    # Notify user that sync is starting
-    hass.async_create_task(
-        hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": f"iCloud Sync: {album_name}",
-                "message": f"Starting initial download for '{album_name}'. This may take a few minutes...",
-                "notification_id": notification_id
-            }
-        )
-    )
+    # 1. Immediate Logging
+    _LOGGER.info("Camera setup complete. Starting notification and sync for %s", album_name)
 
-    # Run sync and dismiss notification when done
-    def sync_and_notify():
-        camera._sync_images()
-        hass.add_job(async_dismiss, hass, notification_id)
-        # Create a final brief notification that it's done
-        hass.add_job(
-            async_create, 
-            hass, 
-            f"Download complete! {album_name} is ready.", 
-            "iCloud Sync Complete", 
-            f"done_{notification_id}"
-        )
+    async_create(hass, f"Starting sync for '{album_name}'...", "iCloud Sync", notification_id)
 
-    await hass.async_add_executor_job(sync_and_notify)
+    def run_sync_task():
+        try:
+            # Re-verify path inside the thread
+            _LOGGER.info("[%s] Sync thread started...", album_name)
+            camera._sync_images()
+        finally:
+            hass.add_job(async_dismiss, hass, notification_id)
+
+    # Use a direct executor call
+    await hass.async_add_executor_job(run_sync_task)
 
 class ICloudPhotoFrameCamera(Camera):
     def __init__(self, token, album_name, entry_id):
@@ -60,88 +43,65 @@ class ICloudPhotoFrameCamera(Camera):
         self._entry_id = entry_id
         self.entity_id = f"camera.icloud_photoframe_{entry_id[-4:]}"
         self._cache_dir = os.path.join(CACHE_BASE_DIR, entry_id)
-        
-        self._base_url = f"https://p23-sharedstreams.icloud.com/{self._token}/sharedstreams"
         self._last_sync = 0
         self._headers = {
-            "Origin": "https://www.icloud.com",
-            "Referer": "https://www.icloud.com/",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "Content-Type": "text/plain",
         }
 
     def _sync_images(self):
-        _LOGGER.info("[%s] Starting sync...", self._album_name)
+        # IF THIS LINE DOESN'T SHOW IN LOGS, THE FUNCTION ISN'T RUNNING
+        _LOGGER.warning("!!! SYNC FUNCTION EXECUTING NOW for %s !!!", self._album_name)
+        
         try:
             if not os.path.exists(self._cache_dir):
                 os.makedirs(self._cache_dir, exist_ok=True)
+                _LOGGER.info("Created folder: %s", self._cache_dir)
 
             session = requests.Session()
-            url = f"{self._base_url}/webstream"
+            url = f"https://p23-sharedstreams.icloud.com/{self._token}/sharedstreams/webstream"
             
-            for _ in range(3):
-                r = session.post(url, data='{"streamCtag":null}', headers=self._headers)
-                if r.status_code == 330:
-                    data = r.json()
-                    host = data.get("X-Apple-MMe-Host")
-                    self._base_url = f"https://{host}/{self._token}/sharedstreams"
-                    url = f"{self._base_url}/webstream"
-                    continue
-                break
-            
+            # Shard handling
+            r = session.post(url, data='{"streamCtag":null}', headers=self._headers, timeout=10)
+            if r.status_code == 330:
+                host = r.json().get("X-Apple-MMe-Host")
+                url = f"https://{host}/{self._token}/sharedstreams/webstream"
+                r = session.post(url, data='{"streamCtag":null}', headers=self._headers, timeout=10)
+
             r.raise_for_status()
             photos = r.json().get("photos", [])
+            _LOGGER.info("Apple returned %s photos.", len(photos))
 
-            if not photos:
-                _LOGGER.warning("[%s] No photos found.", self._album_name)
-                return
+            if photos:
+                guids = [p["photoGuid"] for p in photos]
+                # Asset URLs
+                asset_url = url.replace("webstream", "webasseturls")
+                r_assets = session.post(asset_url, data=json.dumps({"photoGuids": guids}), headers=self._headers)
+                assets = r_assets.json().get("items", {})
 
-            guids = [p["photoGuid"] for p in photos]
-            r_assets = session.post(f"{self._base_url}/webasseturls", 
-                                    data=json.dumps({"photoGuids": guids}), 
-                                    headers=self._headers)
-            assets = r_assets.json().get("items", {})
-
-            count = 0
-            for guid, asset in assets.items():
-                file_path = os.path.join(self._cache_dir, f"{guid}.jpg")
-                if not os.path.exists(file_path):
-                    img_url = f"https://{asset['url_location']}{asset['url_path']}"
-                    img_data = session.get(img_url, timeout=15).content
-                    with open(file_path, 'wb') as f:
-                        f.write(img_data)
-                    count += 1
-
-            valid_filenames = [f"{g}.jpg" for g in guids]
-            for filename in os.listdir(self._cache_dir):
-                if filename not in valid_filenames:
-                    os.remove(os.path.join(self._cache_dir, filename))
+                for guid, asset in assets.items():
+                    path = os.path.join(self._cache_dir, f"{guid}.jpg")
+                    if not os.path.exists(path):
+                        img_url = f"https://{asset['url_location']}{asset['url_path']}"
+                        with open(path, 'wb') as f:
+                            f.write(session.get(img_url).content)
             
             self._last_sync = time.time()
-            _LOGGER.info("[%s] Sync complete.", self._album_name)
+            _LOGGER.warning("!!! SYNC FINISHED for %s - Cache size: %s !!!", self._album_name, len(os.listdir(self._cache_dir)))
 
         except Exception as e:
-            _LOGGER.error("[%s] Sync failed: %s", self._album_name, str(e))
+            _LOGGER.error("CRITICAL SYNC ERROR: %s", str(e))
 
     def camera_image(self, width=None, height=None):
-        now = time.time()
-        if (now - self._last_sync) > 3600:
-            self.hass.add_job(self._sync_images)
-
         if not os.path.exists(self._cache_dir): return None
         files = [f for f in os.listdir(self._cache_dir) if f.endswith('.jpg')]
         if not files: return None
-
         interval = 10 if TEST_MODE else 300
-        random.seed(int(now // interval))
-        selected_file = random.choice(files)
-        
-        with open(os.path.join(self._cache_dir, selected_file), 'rb') as f:
+        random.seed(int(time.time() // interval))
+        with open(os.path.join(self._cache_dir, random.choice(files)), 'rb') as f:
             return f.read()
 
     @property
     def name(self): return self._album_name
-
     @property
     def unique_id(self): return f"icloud_photoframe_{self._entry_id}"
