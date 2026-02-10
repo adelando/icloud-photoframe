@@ -20,7 +20,7 @@ Most iCloud integrations require complex 2-Factor Authentication (2FA) which fre
 ### Step 2: Install via HACS
 1. Open **HACS** in Home Assistant.
 2. Click the three dots in the top-right corner and select **Custom repositories**.
-3. Paste your GitHub URL: `https://github.com/YOUR_USERNAME/icloud_photoframe`
+3. Paste your GitHub URL: `https://github.com/adelando/icloud_photoframe`
 4. Select **Integration** as the category and click **Add**.
 5. Find "iCloud Photo Frame" in HACS and click **Download**.
 6. **Restart Home Assistant.**
