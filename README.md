@@ -32,16 +32,56 @@ Most iCloud integrations require complex 2-Factor Authentication (2FA) which fre
 
 ---
 
-## The Entities Created
+## Entities created
 
-Once installed, the integration creates a single, clean entity:
+After setup, the integration creates:
 
-| Entity ID | Description |
-| :--- | :--- |
-| `camera.icloud_photoframe` | A camera entity that serves a random image from your album. |
+| Entity Type | Example ID | Description |
+| :--- | :--- | :--- |
+| Camera | `camera.kitchen_frame` | Displays the current slideshow image from the shared iCloud album. |
+| Button | `button.kitchen_frame_refresh` | Triggers an immediate re-sync against iCloud (download new photos/remove deleted ones). |
+| Button | `button.kitchen_frame_next` | Immediately advances to another cached photo. |
 
-### Camera Behavior
+> Note: Exact entity IDs depend on your album name and Home Assistant naming rules.
+
+## Where to find the buttons
+
+The **Refresh** and **Next Image** buttons are standard Home Assistant `button` entities. You can find them in:
+
+* **Settings > Devices & Services > iCloud Photo Frame > Entities**
+* **Settings > Devices & Services > Entities** (search for `icloud`)
+
+You can press them directly from the entity detail page, add them to a dashboard, or trigger them from automations/scripts.
+
+## How to use the button actions
+
+### 1) Manually from UI
+Open a button entity and click **Press**:
+
+* **Refresh button**: run sync now
+* **Next Image button**: change image now
+
+### 2) From automations/scripts
+Use the Home Assistant `button.press` service.
+
+```yaml
+service: button.press
+target:
+  entity_id: button.kitchen_frame_refresh
+```
+
+```yaml
+service: button.press
+target:
+  entity_id: button.kitchen_frame_next
+```
+
+Common ideas:
+* Refresh every 15 minutes during daytime.
+* Advance image on a Zigbee button press.
+* Advance image on motion.
+
+### Camera behavior
 * **Rotation:** The image automatically rotates every 5 minutes (300 seconds).
 * **Sync:** The integration checks for new or deleted photos in your iCloud album every hour.
 * **Cleanup:** If you delete a photo from your iPhone, it is automatically removed from the Home Assistant cache during the next sync.
-
