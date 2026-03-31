@@ -1,15 +1,19 @@
 from homeassistant.components.button import ButtonEntity
+
 from .const import DOMAIN
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up the buttons for iCloud Photo Frame."""
-    # Fetch camera instance from memory
+    """Set up action buttons for iCloud Photo Frame."""
     camera_entity = hass.data[DOMAIN][entry.entry_id]
-    
-    async_add_entities([
-        RefreshButton(camera_entity, entry.entry_id),
-        NextImageButton(camera_entity, entry.entry_id)
-    ])
+
+    async_add_entities(
+        [
+            RefreshButton(camera_entity, entry.entry_id),
+            NextImageButton(camera_entity, entry.entry_id),
+        ]
+    )
+
 
 class RefreshButton(ButtonEntity):
     def __init__(self, camera, entry_id):
@@ -18,9 +22,10 @@ class RefreshButton(ButtonEntity):
         self._attr_unique_id = f"{entry_id}_refresh"
         self._attr_icon = "mdi:refresh"
 
-    def press(self):
-        """Force a sync safely using a thread job."""
-        self.hass.add_job(self._camera._sync_images)
+    async def async_press(self):
+        """Force an immediate sync."""
+        await self._camera.async_sync_images()
+
 
 class NextImageButton(ButtonEntity):
     def __init__(self, camera, entry_id):
@@ -29,6 +34,6 @@ class NextImageButton(ButtonEntity):
         self._attr_unique_id = f"{entry_id}_next"
         self._attr_icon = "mdi:skip-next"
 
-    def press(self):
+    async def async_press(self):
         """Skip to the next image."""
         self._camera.next_image()
